@@ -48,11 +48,14 @@ func findFreePort(startPort int32) int32 {
 	st := startPort
 	for {
 		t, err := net.Listen("tcp", ":"+strconv.Itoa(int(st)))
-		if err != nil {
+		t1, err1 := net.Listen("tcp", ":"+strconv.Itoa(int(st)+1))
+		if err != nil || err1 != nil {
 			st += 1
 			t.Close()
+			t1.Close()
 		} else {
 			t.Close()
+			t1.Close()
 			break
 		}
 	}

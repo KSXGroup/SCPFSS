@@ -29,6 +29,8 @@ type SCPFSS struct {
 	wg                  *sync.WaitGroup
 	localDhtAddr        string
 	localFileServerAddr string
+	localRpcServerAddr  string
+	maxCoroutine        int32
 }
 
 func NewSCPFSS() *SCPFSS {
@@ -39,6 +41,8 @@ func NewSCPFSS() *SCPFSS {
 	ret.localDhtAddr = getIp() + ":" + strconv.Itoa(int(port))
 	port = findFreePort(defaultFilePort)
 	ret.localFileServerAddr = getIp() + ":" + strconv.Itoa(int(port))
+	ret.localRpcServerAddr = getIp() + ":" + strconv.Itoa(int(port+1))
+	ret.maxCoroutine = 10
 	ret.wg = new(sync.WaitGroup)
 	ret.wg.Add(1)
 	go dht.Run(ret.wg)
@@ -65,7 +69,8 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 		err := errors.New("Not in the SCPFS Network")
 		return "", err
 	}
-	var v1, v2 string
+	var v1 string
+	var v2 SCPFSFileInfo
 	var ok1, ok2 bool
 	v1, ok1 = sys.server.fileShared.filePathToHash[filePath]
 	if ok1 {
@@ -76,14 +81,28 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 	if rerr != nil {
 		return "", rerr
 	}
-	v2, ok2 = sys.server.fileShared.hashToFilePath[fileCheckSum]
+	v2, ok2 = sys.server.fileShared.hashToFileInfo[fileCheckSum]
 	if ok2 {
 		rerr := errors.New("File is still sharing")
-		return linkPrefix + v2, rerr
+		return linkPrefix + v2.Path, rerr
 	}
 	sys.server.fileShared.idToFilePath = append(sys.server.fileShared.idToFilePath, fileCheckSum)
+	file, _ := os.Open(filePath)
+	defer file.Close()
+	info, fserr := file.Stat()
+	if fserr != nil {
+		return "", fserr
+	}
+	if info.IsDir() {
+		err := errors.New("Invalid file, do not use directory to cheat me")
+		return "", err
+	}
+	v2.LastMod = info.ModTime()
+	v2.Size = info.Size()
+	v2.Name = info.Name()
+	v2.Path = filePath
 	sys.server.fileShared.filePathToHash[filePath] = fileCheckSum
-	sys.server.fileShared.hashToFilePath[fileCheckSum] = filePath
+	sys.server.fileShared.hashToFileInfo[fileCheckSum] = v2
 	ret := sys.server.dhtNode.AppendToData(fileCheckSum, sys.localFileServerAddr+";")
 	if ret == 2 {
 		err := errors.New("This file has been shared before")
@@ -100,6 +119,8 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 		err := errors.New("Not in the SCPFS Network")
 		return false, err
 	}
+	var toDelHash, toDelPath string
+	var toDelId int
 	v1, ok1 := sys.server.fileShared.filePathToHash[filePath]
 	if !ok1 {
 		err := errors.New("File has not been shared before")
@@ -113,6 +134,17 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 		err := errors.New("File not found in SCPFS network")
 		return false, err
 	}
+	for k, v := range sys.server.fileShared.idToFilePath {
+		if v == filePath {
+			toDelPath = v
+			toDelId = k
+			break
+		}
+	}
+	toDelHash = sys.server.fileShared.filePathToHash[toDelPath]
+	delete(sys.server.fileShared.filePathToHash, toDelPath)
+	delete(sys.server.fileShared.hashToFileInfo, toDelHash)
+	sys.server.fileShared.idToFilePath = append(sys.server.fileShared.idToFilePath[:toDelId], sys.server.fileShared.idToFilePath[toDelId:]...)
 	return true, nil
 }
 
@@ -133,12 +165,35 @@ func (sys *SCPFSS) CreateNetwork() (bool, error) {
 }
 
 func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
+	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
+		err := errors.New("Not in the SCPFS Network")
+		return false, err
+	}
 	hashid := strings.Replace(link, linkPrefix, "", -1)
+	sl, err := sys.server.getServerList(hashid)
+	if err != nil {
+		return false, err
+	}
+	fmt.Println("Get avaliable node list:")
+	for _, v := range sl.list {
+		if v != "" {
+			fmt.Println(v)
+		}
+	}
+	//TODO ITERATE THE LIST AND REQUEST FIRST AVALIBLE SERVER FOR FILE INFO
 	return true, nil
 }
 
-func (sys *SCPFSS) ListFileShared() string {
-	return ""
+func (sys *SCPFSS) ListFileShared() {
+	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
+		return
+	}
+	if len(sys.server.fileShared.hashToFileInfo) == 0 {
+		fmt.Print("[No file shared]")
+	}
+	for _, v := range sys.server.fileShared.hashToFileInfo {
+		fmt.Printf(v.Name + "\t" + strconv.Itoa(int(v.Size)) + "\t" + v.LastMod.Format("2006/01/02 15:04:05") + "\n")
+	}
 }
 
 func (sys *SCPFSS) handleCmd(cmd string) int {
@@ -177,6 +232,9 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		return 1
 	case "create":
 		sys.CreateNetwork()
+		return 1
+	case "ls":
+		sys.ListFileShared()
 		return 1
 	default:
 		return 0
