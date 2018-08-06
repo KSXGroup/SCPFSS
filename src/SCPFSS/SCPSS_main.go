@@ -65,6 +65,9 @@ func (sys *SCPFSS) Quit() {
 			sys.StopShare(k)
 		}
 		//TODO STOP FILE SERVER
+		if sys.server.serverRpcService.rpcListener != nil {
+			sys.server.serverRpcService.rpcListener.Close()
+		}
 		sys.server.dhtNode.Quit()
 	}
 }

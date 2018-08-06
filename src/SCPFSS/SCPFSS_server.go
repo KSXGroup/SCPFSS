@@ -21,14 +21,19 @@ type iSCPFSServer struct {
 	dhtNode             *chordNode.RingNode
 	severRpc            *rpc.Server
 	serverRpcService    *RpcModule
+	serverFileService   *iSCPFSTCPFileServer
 	localFileServerAddr string
 	localRpcServerAddr  string
 	ifInNetwork         bool
-	//TODO FILE SERVER
+}
+
+type iSCPFSTCPFileServer struct {
+	fileListener *net.Listener
 }
 
 type RpcModule struct {
-	server *iSCPFSServer
+	server      *iSCPFSServer
+	rpcListener net.Listener
 }
 
 func newFileMapper() *fileMapper {
@@ -52,6 +57,8 @@ func newSCPFSServer(lfsa, lrsa string) *iSCPFSServer {
 	ret.severRpc = new(rpc.Server)
 	ret.localFileServerAddr = lfsa
 	ret.localRpcServerAddr = lrsa
+	ret.serverRpcService.rpcListener = nil
+	ret.serverRpcService.server = ret
 	ret.severRpc.RegisterName("SCPFSS", ret.serverRpcService)
 	return ret
 }
@@ -83,6 +90,10 @@ func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 	}
 }
 
+func (f *iSCPFSTCPFileServer) serveClient() {}
+
+func (f *iSCPFSTCPFileServer) runFileSever() {}
+
 func (s *iSCPFSServer) pingRpcServer(addr string) bool {
 	var arg, ret Greet
 	tconn, err := net.DialTimeout("tcp", addr, time.Duration(int64(TIME_OUT)))
@@ -103,7 +114,8 @@ func (s *iSCPFSServer) runServer() error {
 	if err != nil {
 		return err
 	}
-	go s.severRpc.Accept(lis)
+	s.serverRpcService.rpcListener = lis
+	go s.severRpc.Accept(s.serverRpcService.rpcListener)
 	//TODO RUN FILE SERVER
 	return nil
 }
