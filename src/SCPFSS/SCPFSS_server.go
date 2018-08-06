@@ -3,6 +3,7 @@ package SCPFSS
 import (
 	"chordNode"
 	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -64,11 +65,13 @@ func (s *iSCPFSServer) deCodeServerList(raw string) []string {
 func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 	rawString, ok := s.dhtNode.Get(hashedValue)
 	if !ok {
-		err := errors.New("Can find the file's server list in network, please try again later")
+		fmt.Println("Can't find the file's server list in network, please try again later")
+		err := errors.New("Can't find the file's server list in network, please try again later")
 		return nil, err
 	} else {
 		tmp := s.deCodeServerList(rawString)
 		if len(rawString) <= 8 || len(tmp) == 0 {
+			fmt.Println("Get invalid server list")
 			err := errors.New("Get invalid server list")
 			return nil, err
 		} else {

@@ -25,6 +25,7 @@ const (
 	defaultDhtPort  int32  = 1919
 	defaultFilePort int32  = 2020
 	fileChunk       int32  = 4096
+	linkLen         int32  = 55
 	TIME_OUT        int64  = 1e9
 )
 
@@ -209,7 +210,13 @@ func (sys *SCPFSS) CreateNetwork() (bool, error) {
 
 func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
+		fmt.Println("Not in the SCPFS Network")
 		err := errors.New("Not in the SCPFS Network")
+		return false, err
+	}
+	if len(link) != int(linkLen) {
+		fmt.Println("Invalid SCPFS Link")
+		err := errors.New("7Invalid SCPFS Link")
 		return false, err
 	}
 	var cl *rpc.Client
@@ -229,6 +236,7 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 	}
 	if len(sl.list) <= 0 {
 		lerr := errors.New("Invalid server list")
+		fmt.Println("Invalid server list")
 		return false, lerr
 	}
 	arg.FileCheckSum = hashid
