@@ -13,10 +13,40 @@ import (
 	"time"
 )
 
+type Greet struct {
+	Hello string
+}
+
+type FileHash struct {
+	FileCheckSum string
+}
+
+type SCPFSFileInfo struct {
+	Name    string
+	Path    string
+	Size    int64
+	LastMod time.Time
+}
+
+type fileMapper struct {
+	hashToFileInfo map[string]SCPFSFileInfo
+	filePathToHash map[string]string
+	idToFilePath   []string
+}
+
+type serverList struct {
+	list   []string
+	length int32
+}
+
 const (
 	INFO  uint8 = 1
 	ERROR uint8 = 2
 )
+
+func (info *SCPFSFileInfo) Print() {
+	fmt.Printf(info.Name + "\t" + strconv.Itoa(int(info.Size)) + "\t" + "Last modified in" + info.LastMod.Format("2006/01/02 15:04:05") + "\n")
+}
 
 func PrintLog(log string, logType uint8) {
 	s := "[" + time.Unix(time.Now().Unix(), 0).Format("2006/01/02 15:04:05") + "]" + log + "\n"

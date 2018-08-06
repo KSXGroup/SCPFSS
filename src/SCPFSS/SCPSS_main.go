@@ -5,10 +5,13 @@ import (
 	"chordNode"
 	"errors"
 	"fmt"
+	"net"
+	"net/rpc"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -18,10 +21,11 @@ const (
 	stopShareInfo   string = "StopShare <YourFilePath>"
 	findInfo        string = "Find <SCPFSS LINK>"
 	joinInfo        string = "Join <IP:Port>"
-	linkPrefix      string = "SCPFSP-SHA1:"
+	linkPrefix      string = "SCPFSP:?h=SHA1:"
 	defaultDhtPort  int32  = 1919
 	defaultFilePort int32  = 2020
 	fileChunk       int32  = 4096
+	TIME_OUT        int64  = 1e9
 )
 
 type SCPFSS struct {
@@ -31,17 +35,18 @@ type SCPFSS struct {
 	localFileServerAddr string
 	localRpcServerAddr  string
 	maxCoroutine        int32
+	Timeout             int32
 }
 
 func NewSCPFSS() *SCPFSS {
 	ret := new(SCPFSS)
-	ret.server = newSCPFSServer()
 	port := findFreePort(defaultDhtPort)
 	dht := chordNode.NewNode(port)
 	ret.localDhtAddr = getIp() + ":" + strconv.Itoa(int(port))
 	port = findFreePort(defaultFilePort)
 	ret.localFileServerAddr = getIp() + ":" + strconv.Itoa(int(port))
 	ret.localRpcServerAddr = getIp() + ":" + strconv.Itoa(int(port+1))
+	ret.server = newSCPFSServer(ret.localFileServerAddr, ret.localRpcServerAddr)
 	ret.maxCoroutine = 10
 	ret.wg = new(sync.WaitGroup)
 	ret.wg.Add(1)
@@ -149,13 +154,29 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 }
 
 func (sys *SCPFSS) JoinNetwork(addr string) (bool, error) {
+	var hasFileServer bool = false
+	if len(add) < 7 {
+		err := errors.New("Invalid Addr")
+		return false, err
+	}
 	if !sys.server.dhtNode.Join(addr) {
 		err := errors.New("Fail to join DHT network")
 		return false, err
 	}
-	//TODO check if target ip has file serve
-	sys.server.ifInNetwork = true
-	return true, nil
+	for i := 1; i <= 100; i += 1 {
+		ip = strings.Split(addr, ":")[0] + strconv.Itoa(int(defaultFilePort)+i)
+		if sys.server.pingRpcServer(ip) {
+			hasFileServer = true
+			break
+		}
+	}
+	if hasFileServer {
+		sys.server.ifInNetwork = true
+		return true, nil
+	} else {
+		ferr := errors.New("Remote address has no file server")
+		return false, ferr
+	}
 }
 
 func (sys *SCPFSS) CreateNetwork() (bool, error) {
@@ -169,6 +190,10 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 		err := errors.New("Not in the SCPFS Network")
 		return false, err
 	}
+	var cl *rpc.Client
+	var ret SCPFSFileInfo
+	var arg FileHash
+	var goodFlag bool = false
 	hashid := strings.Replace(link, linkPrefix, "", -1)
 	sl, err := sys.server.getServerList(hashid)
 	if err != nil {
@@ -180,7 +205,32 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 			fmt.Println(v)
 		}
 	}
-	//TODO ITERATE THE LIST AND REQUEST FIRST AVALIBLE SERVER FOR FILE INFO
+	if len(sl.list) <= 0 {
+		lerr := errors.New("Invalid server list")
+		return false, lerr
+	}
+	arg.FileCheckSum = hashid
+	for _, item := range sl.list {
+		fmt.Println("Try " + item)
+		tconn, cerr := net.DialTimeout("tcp", item, time.Duration(TIME_OUT))
+		if cerr != nil || tconn == nil {
+			tconn.Close()
+			tconn = nil
+		} else {
+			cl = rpc.NewClient(tconn)
+			rpcErr := cl.Call("SCPFSS.LookUpFile", &arg, &ret)
+			cl.Close()
+			if rpcErr == nil {
+				ret.Print()
+				goodFlag = true
+				break
+			}
+		}
+	}
+	if !goodFlag {
+		ferr := errors.New("All nodes are fail, file lost")
+		return false, ferr
+	}
 	return true, nil
 }
 
@@ -192,7 +242,7 @@ func (sys *SCPFSS) ListFileShared() {
 		fmt.Print("[No file shared]")
 	}
 	for _, v := range sys.server.fileShared.hashToFileInfo {
-		fmt.Printf(v.Name + "\t" + strconv.Itoa(int(v.Size)) + "\t" + v.LastMod.Format("2006/01/02 15:04:05") + "\n")
+		v.Print()
 	}
 }
 
@@ -242,8 +292,10 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 }
 
 func (sys *SCPFSS) RunConsole() int {
+	sys.server.runServer()
 	reader := bufio.NewReader(os.Stdin)
 	var ipt string
+	fmt.Println(welcomeInfo)
 	for {
 		fmt.Print("[SCPFS@" + sys.server.dhtNode.Info.GetAddrWithPort() + "]$")
 		ipt, _ = reader.ReadString('\n')

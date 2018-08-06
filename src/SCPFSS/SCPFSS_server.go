@@ -3,9 +3,11 @@ package SCPFSS
 import (
 	"chordNode"
 	"errors"
+	"net"
 	"strings"
 	"time"
 	//"fmt"
+	"net/rpc"
 )
 
 const (
@@ -13,32 +15,19 @@ const (
 	MAX_FILE_TO_SHARE   int32 = 1024
 )
 
-type SCPFSFileInfo struct {
-	Name    string
-	Path    string
-	Size    int64
-	LastMod time.Time
-}
-
-type fileMapper struct {
-	hashToFileInfo map[string]SCPFSFileInfo
-	filePathToHash map[string]string
-	idToFilePath   []string
-}
-
-type serverList struct {
-	list   []string
-	length int32
-}
-
 type iSCPFSServer struct {
-	fileShared  *fileMapper
-	dhtNode     *chordNode.RingNode
-	ifInNetwork bool
+	fileShared          *fileMapper
+	dhtNode             *chordNode.RingNode
+	severRpc            *rpc.Server
+	serverRpcService    *RpcModule
+	localFileServerAddr string
+	localRpcServerAddr  string
+	ifInNetwork         bool
 	//TODO FILE SERVER
 }
 
-type RPCModule struct {
+type RpcModule struct {
+	server *iSCPFSServer
 }
 
 func newFileMapper() *fileMapper {
@@ -49,9 +38,14 @@ func newFileMapper() *fileMapper {
 	return ret
 }
 
-func newSCPFSServer() *iSCPFSServer {
+func newSCPFSServer(lfsa, lrsa string) *iSCPFSServer {
 	ret := new(iSCPFSServer)
 	ret.fileShared = new(fileMapper)
+	ret.serverRpcService = new(RpcModule)
+	ret.severRpc = new(rpc.Server)
+	ret.localFileServerAddr = lfsa
+	ret.localRpcServerAddr = lrsa
+	ret.severRpc.RegisterName("SCPFSS", ret.serverRpcService)
 	return ret
 }
 
@@ -79,4 +73,47 @@ func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 		}
 	}
 }
-func 
+
+func (s *iSCPFSServer) pingRpcServer(addr string) bool {
+	var arg, ret Greet
+	tconn, err := net.DialTimeout("tcp", addr, time.Duration(int64(TIME_OUT)))
+	if tconn == nil || err != nil {
+		return false
+	}
+	cl := rpc.NewClient(tconn)
+	cl.Call("SCPFSS.Ping", &arg, &ret)
+	cl.Close()
+	if ret.Hello != "Hello" {
+		return false
+	}
+	return true
+}
+
+func (s *iSCPFSServer) runServer() error {
+	lis, err := net.Listen("tcp", s.localRpcServerAddr)
+	if err != nil {
+		return err
+	}
+	go s.severRpc.Accept(lis)
+	//TODO RUN FILE SERVER
+	return nil
+}
+
+func (h *RpcModule) LookUpFile(arg FileHash, ret *SCPFSFileInfo) (err error) {
+	v, ok := h.server.fileShared.hashToFileInfo[arg.FileCheckSum]
+	if !ok {
+		err = errors.New("No such file on this server")
+		return err
+	} else {
+		ret.LastMod = v.LastMod
+		ret.Name = v.Name
+		ret.Path = v.Path
+		ret.Size = v.Size
+		return nil
+	}
+}
+
+func (h *RpcModule) Ping(arg Greet, ret *Greet) (err error) {
+	ret.Hello = "Hello"
+	return nil
+}
