@@ -45,7 +45,7 @@ const (
 )
 
 func (info *SCPFSFileInfo) Print() {
-	fmt.Printf(info.Name + "\t" + strconv.Itoa(int(info.Size)) + "\t" + "Last modified in: " + info.LastMod.Format("2006/01/02 15:04:05") + "\n")
+	fmt.Printf(info.Name + "\t\t" + strconv.Itoa(int(info.Size)) + "\t\t" + info.LastMod.Format("2006/01/02 15:04:05") + "\n")
 }
 
 func PrintLog(log string, logType uint8) {
@@ -80,9 +80,13 @@ func findFreePort(startPort int32) int32 {
 		t, err := net.Listen("tcp", ":"+strconv.Itoa(int(st)))
 		t1, err1 := net.Listen("tcp", ":"+strconv.Itoa(int(st)+1))
 		if err != nil || err1 != nil {
+			if t != nil {
+				t.Close()
+			}
+			if t1 != nil {
+				t1.Close()
+			}
 			st += 1
-			t.Close()
-			t1.Close()
 		} else {
 			t.Close()
 			t1.Close()
@@ -103,8 +107,15 @@ func sha1HashFile(filePath string) (string, error) {
 	info, _ := file.Stat()
 	size := info.Size()
 	blockCount := uint64(math.Ceil(float64(size)) / float64(fileChunk))
-	for i := uint64(0); i < blockCount; i += 1 {
-		bsz := int(math.Min(float64(fileChunk), float64(size-int64(i*uint64(fileChunk)))))
+	if blockCount != 0 {
+		for i := uint64(0); i < blockCount; i += 1 {
+			bsz := int(math.Min(float64(fileChunk), float64(size-int64(i*uint64(fileChunk)))))
+			buffer := make([]byte, bsz)
+			file.Read(buffer)
+			io.WriteString(sha1hash, string(buffer))
+		}
+	} else {
+		bsz := info.Size()
 		buffer := make([]byte, bsz)
 		file.Read(buffer)
 		io.WriteString(sha1hash, string(buffer))

@@ -34,7 +34,7 @@ func newFileMapper() *fileMapper {
 	ret := new(fileMapper)
 	ret.hashToFileInfo = make(map[string]SCPFSFileInfo)
 	ret.filePathToHash = make(map[string]string)
-	ret.idToFilePath = make([]string, int(MAX_FILE_TO_SHARE))
+	ret.idToFilePath = make([]string, 0)
 	return ret
 }
 

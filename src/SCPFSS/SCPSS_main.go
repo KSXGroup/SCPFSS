@@ -17,10 +17,10 @@ import (
 const (
 	welcomeInfo     string = "Welcome to use Stupid Chord Peer to peer File Sharing System"
 	helpInfo        string = "There is no help info, you are on your own, you can choose to uninstall this stupid software."
-	startShareInfo  string = "Share <YourFilePath>"
-	stopShareInfo   string = "StopShare <YourFilePath>"
-	findInfo        string = "Find <SCPFSS LINK>"
-	joinInfo        string = "Join <IP:Port>"
+	startShareInfo  string = "share <YourFilePath>"
+	stopShareInfo   string = "stopShare <YourFilePath>"
+	findInfo        string = "find <SCPFSS LINK>"
+	joinInfo        string = "join <IP:Port>"
 	linkPrefix      string = "SCPFSP:?h=SHA1:"
 	defaultDhtPort  int32  = 1919
 	defaultFilePort int32  = 2020
@@ -71,6 +71,7 @@ func (sys *SCPFSS) Quit() {
 func (sys *SCPFSS) Share(filePath string) (string, error) {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
 		err := errors.New("Not in the SCPFS Network")
+		fmt.Println("Not in SCPFS network")
 		return "", err
 	}
 	var v1 string
@@ -79,18 +80,22 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 	v1, ok1 = sys.server.fileShared.filePathToHash[filePath]
 	if ok1 {
 		rerr := errors.New("File is still sharing")
+		fmt.Println("This file has been shared before, please note down the link below:")
+		fmt.Println(linkPrefix + v1)
 		return linkPrefix + v1, rerr
 	}
 	fileCheckSum, rerr := sha1HashFile(filePath)
 	if rerr != nil {
+		fmt.Println("Hash fail, invalid file")
 		return "", rerr
 	}
 	v2, ok2 = sys.server.fileShared.hashToFileInfo[fileCheckSum]
 	if ok2 {
 		rerr := errors.New("File is still sharing")
-		return linkPrefix + v2.Path, rerr
+		fmt.Println("This file has been shared before, please note down the link below:")
+		fmt.Println(linkPrefix + fileCheckSum)
+		return linkPrefix + fileCheckSum, rerr
 	}
-	sys.server.fileShared.idToFilePath = append(sys.server.fileShared.idToFilePath, fileCheckSum)
 	file, _ := os.Open(filePath)
 	defer file.Close()
 	info, fserr := file.Stat()
@@ -99,12 +104,14 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 	}
 	if info.IsDir() {
 		err := errors.New("Invalid file, do not use directory to cheat me")
+		fmt.Println("Invalid file, do not use directory to cheat me")
 		return "", err
 	}
 	v2.LastMod = info.ModTime()
 	v2.Size = info.Size()
 	v2.Name = info.Name()
 	v2.Path = filePath
+	sys.server.fileShared.idToFilePath = append(sys.server.fileShared.idToFilePath, filePath)
 	sys.server.fileShared.filePathToHash[filePath] = fileCheckSum
 	sys.server.fileShared.hashToFileInfo[fileCheckSum] = v2
 	ret := sys.server.dhtNode.AppendToData(fileCheckSum, sys.localFileServerAddr+";")
@@ -125,6 +132,7 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
 		err := errors.New("Not in the SCPFS Network")
+		fmt.Println("Not in SCPFS network")
 		return false, err
 	}
 	var toDelHash, toDelPath string
@@ -132,18 +140,22 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 	v1, ok1 := sys.server.fileShared.filePathToHash[filePath]
 	if !ok1 {
 		err := errors.New("File has not been shared before")
+		fmt.Println("File has not been shared before")
 		return false, err
 	}
 	ret := sys.server.dhtNode.RemoveFromData(v1, sys.localFileServerAddr+";")
 	if ret == 0 {
 		err := errors.New("File remove failed for SCPFS reasons, please try again later")
+		fmt.Println("File remove failed for SCPFS reasons, please try again later")
 		return false, err
 	} else if ret == 3 {
 		err := errors.New("File not found in SCPFS network")
+		fmt.Println("File not found in SCPFS network")
 		return false, err
 	}
 	for k, v := range sys.server.fileShared.idToFilePath {
 		if v == filePath {
+			fmt.Println("File found")
 			toDelPath = v
 			toDelId = k
 			break
@@ -153,6 +165,7 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 	delete(sys.server.fileShared.filePathToHash, toDelPath)
 	delete(sys.server.fileShared.hashToFileInfo, toDelHash)
 	sys.server.fileShared.idToFilePath = append(sys.server.fileShared.idToFilePath[:toDelId], sys.server.fileShared.idToFilePath[toDelId:]...)
+	fmt.Println("File stop sharing")
 	return true, nil
 }
 
@@ -164,16 +177,21 @@ func (sys *SCPFSS) JoinNetwork(addr string) (bool, error) {
 	}
 	if !sys.server.dhtNode.Join(addr) {
 		err := errors.New("Fail to join DHT network")
+		fmt.Println("Fail to join DHT network")
 		return false, err
+	} else {
+		fmt.Println("Join DHT network successfully")
 	}
 	for i := 1; i <= 100; i += 1 {
-		ip := strings.Split(addr, ":")[0] + strconv.Itoa(int(defaultFilePort)+i)
+		ip := strings.Split(addr, ":")[0] + ":" + strconv.Itoa(int(defaultFilePort)+i)
 		if sys.server.pingRpcServer(ip) {
+			fmt.Println("Detected remote file server")
 			hasFileServer = true
 			break
 		}
 	}
 	if hasFileServer {
+		fmt.Println("Join SCPFS Network successfully")
 		sys.server.ifInNetwork = true
 		return true, nil
 	} else {
@@ -216,9 +234,19 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 	arg.FileCheckSum = hashid
 	for _, item := range sl.list {
 		fmt.Println("Try " + item)
-		tconn, cerr := net.DialTimeout("tcp", item, time.Duration(TIME_OUT))
+		ts := strings.Split(item, ":")
+		tip := ts[0]
+		tport, perr := strconv.Atoi(ts[1])
+		if perr != nil {
+			fmt.Println(item + " is invalid")
+			continue
+		}
+		tports := strconv.Itoa(tport + 1)
+		taddr := tip + ":" + tports
+		tconn, cerr := net.DialTimeout("tcp", taddr, time.Duration(TIME_OUT))
 		if cerr != nil || tconn == nil {
 			tconn = nil
+			fmt.Println(taddr + " Fail")
 		} else {
 			cl = rpc.NewClient(tconn)
 			rpcErr := cl.Call("SCPFSS.LookUpFile", &arg, &ret)
@@ -244,9 +272,20 @@ func (sys *SCPFSS) ListFileShared() {
 	}
 	if len(sys.server.fileShared.hashToFileInfo) == 0 {
 		fmt.Println("[No file shared]")
+		return
 	}
-	for _, v := range sys.server.fileShared.hashToFileInfo {
-		v.Print()
+	for k, v := range sys.server.fileShared.idToFilePath {
+		if v == "" {
+			break
+		}
+		fmt.Printf("#%d ", k+1)
+		chash := sys.server.fileShared.filePathToHash[v]
+		info, ok := sys.server.fileShared.hashToFileInfo[chash]
+		if ok {
+			info.Print()
+		} else {
+			fmt.Println("[ERROR]")
+		}
 	}
 }
 
@@ -313,7 +352,7 @@ func (sys *SCPFSS) RunConsole() int {
 			sys.Quit()
 			return 0
 		} else if ret == 0 {
-			PrintLog("Wrong Commd", ERROR)
+			fmt.Println("Wrong Commd")
 		}
 	}
 }
