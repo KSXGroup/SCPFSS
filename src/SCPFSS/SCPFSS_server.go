@@ -38,10 +38,16 @@ func newFileMapper() *fileMapper {
 	return ret
 }
 
+func newRpcModule(s *iSCPFSServer) *RpcModule {
+	ret := new(RpcModule)
+	ret.server = s
+	return ret
+}
+
 func newSCPFSServer(lfsa, lrsa string) *iSCPFSServer {
 	ret := new(iSCPFSServer)
-	ret.fileShared = new(fileMapper)
-	ret.serverRpcService = new(RpcModule)
+	ret.fileShared = newFileMapper()
+	ret.serverRpcService = newRpcModule(ret)
 	ret.severRpc = new(rpc.Server)
 	ret.localFileServerAddr = lfsa
 	ret.localRpcServerAddr = lrsa

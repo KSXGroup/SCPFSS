@@ -51,7 +51,6 @@ func NewSCPFSS() *SCPFSS {
 	ret.wg = new(sync.WaitGroup)
 	ret.wg.Add(1)
 	go dht.Run(ret.wg)
-	//TODO RUN FILE SERVER
 	ret.server.dhtNode = dht
 	return ret
 
@@ -111,8 +110,12 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 	ret := sys.server.dhtNode.AppendToData(fileCheckSum, sys.localFileServerAddr+";")
 	if ret == 2 {
 		err := errors.New("This file has been shared before")
+		fmt.Println("This file has been shared before, please note down the link below:")
+		fmt.Println(linkPrefix + fileCheckSum)
 		return linkPrefix + fileCheckSum, err
 	} else if ret == 1 {
+		fmt.Println("File shared successfully, please note down the link below and share with others:")
+		fmt.Println(linkPrefix + fileCheckSum)
 		return linkPrefix + fileCheckSum, nil
 	} else {
 		return "", nil
@@ -155,7 +158,7 @@ func (sys *SCPFSS) StopShare(filePath string) (bool, error) {
 
 func (sys *SCPFSS) JoinNetwork(addr string) (bool, error) {
 	var hasFileServer bool = false
-	if len(add) < 7 {
+	if len(addr) < 7 {
 		err := errors.New("Invalid Addr")
 		return false, err
 	}
@@ -164,7 +167,7 @@ func (sys *SCPFSS) JoinNetwork(addr string) (bool, error) {
 		return false, err
 	}
 	for i := 1; i <= 100; i += 1 {
-		ip = strings.Split(addr, ":")[0] + strconv.Itoa(int(defaultFilePort)+i)
+		ip := strings.Split(addr, ":")[0] + strconv.Itoa(int(defaultFilePort)+i)
 		if sys.server.pingRpcServer(ip) {
 			hasFileServer = true
 			break
@@ -180,6 +183,7 @@ func (sys *SCPFSS) JoinNetwork(addr string) (bool, error) {
 }
 
 func (sys *SCPFSS) CreateNetwork() (bool, error) {
+	fmt.Println("Create new SCPFS Network")
 	sys.server.dhtNode.Create()
 	sys.server.ifInNetwork = true
 	return true, nil
@@ -214,7 +218,6 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 		fmt.Println("Try " + item)
 		tconn, cerr := net.DialTimeout("tcp", item, time.Duration(TIME_OUT))
 		if cerr != nil || tconn == nil {
-			tconn.Close()
 			tconn = nil
 		} else {
 			cl = rpc.NewClient(tconn)
@@ -236,10 +239,11 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 
 func (sys *SCPFSS) ListFileShared() {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
+		fmt.Println("[Not in the SCPFSS]")
 		return
 	}
 	if len(sys.server.fileShared.hashToFileInfo) == 0 {
-		fmt.Print("[No file shared]")
+		fmt.Println("[No file shared]")
 	}
 	for _, v := range sys.server.fileShared.hashToFileInfo {
 		v.Print()
@@ -247,6 +251,9 @@ func (sys *SCPFSS) ListFileShared() {
 }
 
 func (sys *SCPFSS) handleCmd(cmd string) int {
+	if len(cmd) <= 0 {
+		return 1
+	}
 	splitedCmd := strings.Fields(cmd)
 	switch splitedCmd[0] {
 	case "exit":
@@ -297,7 +304,7 @@ func (sys *SCPFSS) RunConsole() int {
 	var ipt string
 	fmt.Println(welcomeInfo)
 	for {
-		fmt.Print("[SCPFS@" + sys.server.dhtNode.Info.GetAddrWithPort() + "]$")
+		fmt.Print("[SCPFS@" + sys.server.dhtNode.Info.GetAddrWithPort() + "]$ ")
 		ipt, _ = reader.ReadString('\n')
 		ipt = strings.TrimSpace(ipt)
 		ipt = strings.Replace(ipt, "\n", "", -1)
@@ -305,7 +312,7 @@ func (sys *SCPFSS) RunConsole() int {
 		if ret == 2 {
 			sys.Quit()
 			return 0
-		} else if ret == 1 {
+		} else if ret == 0 {
 			PrintLog("Wrong Commd", ERROR)
 		}
 	}

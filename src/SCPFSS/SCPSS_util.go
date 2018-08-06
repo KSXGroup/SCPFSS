@@ -45,7 +45,7 @@ const (
 )
 
 func (info *SCPFSFileInfo) Print() {
-	fmt.Printf(info.Name + "\t" + strconv.Itoa(int(info.Size)) + "\t" + "Last modified in" + info.LastMod.Format("2006/01/02 15:04:05") + "\n")
+	fmt.Printf(info.Name + "\t" + strconv.Itoa(int(info.Size)) + "\t" + "Last modified in: " + info.LastMod.Format("2006/01/02 15:04:05") + "\n")
 }
 
 func PrintLog(log string, logType uint8) {
