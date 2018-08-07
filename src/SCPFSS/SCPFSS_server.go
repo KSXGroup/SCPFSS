@@ -107,7 +107,6 @@ func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 }
 
 func (f *iSCPFSTCPFileServer) serveClient(client net.Conn) {
-	fmt.Println("New client")
 	var startPos, endPos int64
 	bstartpos := make([]byte, int(HEADER_LEN))
 	bendpos := make([]byte, int(HEADER_LEN))

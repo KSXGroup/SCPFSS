@@ -24,13 +24,19 @@ const (
 	getInfo         string = "sget <SCPFSS LINK>"
 	joinInfo        string = "join <IP:Port>"
 	sgetInfo        string = "sget <SCPFSS LINK>"
+	sgetmInfo       string = "sgetm <Thread Number> <SCPFSS LINK>"
 	linkPrefix      string = "SCPFSP:?h=SHA1:"
 	defaultDhtPort  int32  = 1919
 	defaultFilePort int32  = 2020
 	fileChunk       int32  = 4096
 	linkLen         int32  = 55
 	sha1Len         int32  = 40
+	minFileChunk    int64  = 1024 * 1024
 	TIME_OUT        int64  = 1e9
+	INIT            uint8  = 0
+	GETTING         uint8  = 1
+	FIN             uint8  = 2
+	ERROR           uint8  = 3
 )
 
 type SCPFSS struct {
@@ -41,6 +47,19 @@ type SCPFSS struct {
 	localRpcServerAddr  string
 	maxCoroutine        int32
 	Timeout             int32
+}
+
+type fileGeter struct {
+	sourceAddr   string
+	sourceHashId string
+	savePath     string
+	start        int64
+	end          int64
+	byteRecv     int64
+	byteToGet    int64
+	taskId       int32
+	status       uint8
+	headerBuffer []byte
 }
 
 func NewSCPFSS() *SCPFSS {
@@ -61,70 +80,138 @@ func NewSCPFSS() *SCPFSS {
 
 }
 
-func (sys *SCPFSS) GetFile(link string, savePath string) error {
-	fmt.Println("Start getting files")
-	//var recvCnt int64 = 0
-	var startPos, endPos int64
-	var byteToRecv int64
-	hashid := strings.Replace(link, linkPrefix, "", -1)
-	ok, fileInfo, err := sys.LookUpFile(link)
-	if err != nil || !ok {
-		fmt.Println("Fail to look up fail, please check your link")
-		return errors.New("Fail to look up fail, please check your link")
+func newFileGetter(addr, hashid, svp string, st, ed int64, id int32) *fileGeter {
+	ret := new(fileGeter)
+	ret.sourceAddr = addr
+	ret.sourceHashId = hashid
+	ret.savePath = svp
+	ret.start = st
+	ret.end = ed
+	ret.taskId = id
+	ret.headerBuffer = make([]byte, int(HEADER_LEN))
+	ret.status = INIT
+	return ret
+}
+
+func (g *fileGeter) startGet(wg *sync.WaitGroup) error {
+	defer wg.Done()
+	g.status = GETTING
+	if g.start < 0 || g.end < 0 || g.savePath == "" || g.sourceAddr == "" || g.sourceHashId == "" || g.taskId < 0 {
+		fmt.Printf("Invalid parameter on task #%d", g.taskId)
+		g.status = ERROR
+		return errors.New("Invalid parameter(s)")
 	}
-	startPos = 0
-	endPos = fileInfo.Size - 1
-	byteToRecv = endPos - startPos + 1
-	slist, serr := sys.server.getServerList(hashid)
-	if serr != nil {
-		return errors.New("Error when get serverlist")
+	g.byteToGet = g.end - g.start + 1
+	if g.byteToGet <= 0 {
+		g.status = ERROR
+		return nil
 	}
-	//TODO USE FIRST SERVER FIRST, THEN IT WILL BECOME MULTI THREAD
-	remoteAddr := slist.list[0]
-	iconn, ierr := net.DialTimeout("tcp", remoteAddr, time.Duration(TIME_OUT))
+	g.byteRecv = 0
+	iconn, ierr := net.DialTimeout("tcp", g.sourceAddr, time.Duration(TIME_OUT))
 	if ierr != nil {
-		fmt.Println("Dial remote node error: " + ierr.Error())
+		fmt.Printf("task#%d: %s\n", g.taskId, "Dial remote node error:"+ierr.Error())
 		if iconn != nil {
 			iconn.Close()
 		}
+		g.status = ERROR
 		return ierr
 	}
-	newFile, ferr := os.Create(savePath + fileInfo.Name) //do this temporarily
+	newFile, ferr := os.Create(g.savePath + ".tmp" + strconv.Itoa(int(g.taskId)))
 	if ferr != nil {
-		fmt.Println("Create file fail: " + ferr.Error())
+		fmt.Printf("task#%d: %s", g.taskId, "Create file fail:"+ferr.Error())
 		return ferr
 	}
 	defer newFile.Close()
-	recvBuffer := make([]byte, int(BUFFER_LEN))
-	iconn.Write([]byte(hashid))
-	_, ioerr := iconn.Read(recvBuffer)
+	iconn.Write([]byte(g.sourceHashId))
+	_, ioerr := iconn.Read(g.headerBuffer)
 	if ioerr != nil {
-		fmt.Println("Transfer error, please retry later")
-		iconn.Close()
+		fmt.Printf("task#%d: %s", g.taskId, "Transfer error, please retry later")
+		if iconn != nil {
+			iconn.Close()
+		}
+		g.status = ERROR
 		return errors.New("Transfer error, please retry later")
 	}
-	response := strings.Replace(string(recvBuffer), "/", "", -1)
-	fmt.Println("Server Response " + response)
-	fmt.Println(response == "Start")
+	response := strings.Replace(string(g.headerBuffer), "/", "", -1)
+	response = strings.TrimSpace(response)
 	if response != "Start" {
 		fmt.Println("Server give incorrect response, download terminated")
 		ioerr := errors.New("Server give incorrect response, download terminated")
 		iconn.Close()
+		g.status = ERROR
 		return ioerr
 	}
-	iconn.Write([]byte(fillTo(strconv.FormatInt(startPos, 10), HEADER_LEN)))
-	iconn.Write([]byte(fillTo(strconv.FormatInt(endPos, 10), HEADER_LEN)))
-	fmt.Println("start transfering file")
+	iconn.Write([]byte(fillTo(strconv.FormatInt(g.start, 10), HEADER_LEN)))
+	iconn.Write([]byte(fillTo(strconv.FormatInt(g.end, 10), HEADER_LEN)))
 	for {
-		if byteToRecv < int64(BUFFER_LEN) {
-			io.CopyN(newFile, iconn, byteToRecv)
+		if g.byteToGet-g.byteRecv < int64(BUFFER_LEN) {
+			io.CopyN(newFile, iconn, int64(g.byteToGet-g.byteRecv))
+			g.byteRecv += g.byteToGet - g.byteRecv
 			break
 		}
 		io.CopyN(newFile, iconn, int64(BUFFER_LEN))
-		byteToRecv -= int64(BUFFER_LEN)
+		g.byteRecv += int64(BUFFER_LEN)
 	}
 	iconn.Close()
-	fmt.Println("File transfered successfully")
+	g.status = FIN
+	return nil
+}
+
+func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount int32) error {
+	fmt.Println("Start getting files")
+	//var recvCnt int64 = 0
+	var startPos, endPos int64
+	var wg sync.WaitGroup
+	hashid := strings.Replace(link, linkPrefix, "", -1)
+	ok, fileInfo, err := sys.LookUpFile(link)
+	if err != nil || !ok {
+		fmt.Println("Fail to look up, please check your link")
+		return errors.New("Fail to look up fail, please check your link")
+	}
+	startPos = 0
+	endPos = fileInfo.Size - 1
+	slist, serr := sys.server.getServerList(hashid)
+	if serr != nil {
+		return errors.New("Error when get serverlist")
+	}
+}
+
+func (sys *SCPFSS) GetFile(link string, savePath string) error {
+	fmt.Println("Start getting files")
+	//var recvCnt int64 = 0
+	var startPos, endPos int64
+	var wg sync.WaitGroup
+	hashid := strings.Replace(link, linkPrefix, "", -1)
+	ok, fileInfo, err := sys.LookUpFile(link)
+	if err != nil || !ok {
+		fmt.Println("Fail to look up, please check your link")
+		return errors.New("Fail to look up fail, please check your link")
+	}
+	startPos = 0
+	endPos = fileInfo.Size - 1
+	slist, serr := sys.server.getServerList(hashid)
+	if serr != nil {
+		return errors.New("Error when get serverlist")
+	}
+	remoteAddr := slist.list[0]
+	getter := newFileGetter(remoteAddr, hashid, savePath+fileInfo.Name, startPos, endPos, 0)
+	fmt.Println("Getting file")
+	wg.Add(1)
+	go getter.startGet(&wg)
+	wg.Wait()
+	fmt.Println("Finished")
+	if getter.byteRecv != getter.byteToGet {
+		fmt.Println("Error occurred when getting file, please retry later")
+		return errors.New("Error occurred when getting file, please retry later")
+	}
+	os.Rename(savePath+fileInfo.Name+".tmp"+strconv.Itoa(int(getter.taskId)), savePath+fileInfo.Name)
+	fmt.Println("Recheck file SHA1")
+	hashOfNewFile, err := sha1HashFile(savePath + fileInfo.Name)
+	if hashOfNewFile == hashid {
+		fmt.Println("Success")
+	} else {
+		fmt.Println("Check fail, please retry")
+	}
 	return nil
 }
 
@@ -373,6 +460,8 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 	if len(cmd) <= 0 {
 		return 1
 	}
+	var cnt int
+	var err error
 	splitedCmd := strings.Fields(cmd)
 	switch splitedCmd[0] {
 	case "exit":
@@ -419,6 +508,19 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 			fmt.Println(sgetInfo)
 		}
 		return 1
+	case "sgetm":
+		cnt, err = strconv.Atoi(splitedCmd[1])
+		if len(splitedCmd) == 2 && err == nil {
+			sys.GetFileMultiThread(splitedCmd[2], "", int32(cnt))
+			return 1
+		} else {
+			fmt.Println(sgetmInfo)
+			return 1
+		}
+	case "info":
+		fmt.Println("DHT: " + sys.localDhtAddr)
+		fmt.Println("FileRPC: " + sys.localRpcServerAddr)
+		fmt.Println("FileServer: " + sys.localFileServerAddr)
 	default:
 		return 0
 	}
