@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,11 +41,14 @@ type serverList struct {
 }
 
 type ProgressBar struct {
-	Percent uint8
-	Title   string
-	Right   string
-	ifTitle bool
-	ifRight bool
+	Percent        uint8
+	UpdateInterval uint8
+	Title          string
+	Right          string
+	wg             *sync.WaitGroup
+	StopSig        bool
+	IfTitle        bool
+	IfRight        bool
 }
 
 const (
@@ -104,9 +108,48 @@ func findFreePort(startPort int32) int32 {
 	return st
 }
 
-func (p *ProgressBar) show() {}
+func NewProgressBar(interval uint8, t, r bool, title string) *ProgressBar {
+	ret := new(ProgressBar)
+	ret.IfRight = r
+	ret.IfTitle = t
+	ret.UpdateInterval = interval
+	ret.Title = title
+	return ret
+}
 
-func (p *ProgressBar) update() {}
+func (p *ProgressBar) Show() {
+	if p.IfTitle {
+		fmt.Println(p.Title)
+	}
+	fmt.Println("\n")
+	pgb := "[" + strings.Repeat(" ", 50) + "]"
+	if p.IfRight {
+		fmt.Printf("%s %s\r", pgb, p.Right)
+	} else {
+		fmt.Printf("%s\r", pgb)
+	}
+	go p.Update()
+}
+
+func (p *ProgressBar) doUpdate() {
+	pgb := "[" + strings.Repeat("=", int(p.Percent/2)) + strings.Repeat(" ", int(50-p.Percent/2)) + "]"
+	if p.IfRight {
+		fmt.Printf("%s %s\r", pgb, p.Right)
+	} else {
+		fmt.Printf("%s\r", pgb)
+	}
+}
+
+func (p *ProgressBar) Update() {
+	for !p.StopSig {
+		p.doUpdate()
+		time.Sleep(time.Duration(int64(p.UpdateInterval)) * time.Millisecond)
+	}
+}
+
+func (p *ProgressBar) Stop() {
+	p.StopSig = true
+}
 
 func sha1HashFile(filePath string) (string, error) {
 	file, err := os.Open(filePath)
