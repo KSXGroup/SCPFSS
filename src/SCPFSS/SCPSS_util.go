@@ -114,6 +114,7 @@ func NewProgressBar(interval uint8, t, r bool, title string) *ProgressBar {
 	ret.IfTitle = t
 	ret.UpdateInterval = interval
 	ret.Title = title
+	ret.wg = new(sync.WaitGroup)
 	return ret
 }
 
@@ -121,18 +122,21 @@ func (p *ProgressBar) Show() {
 	if p.IfTitle {
 		fmt.Println(p.Title)
 	}
-	fmt.Println("\n")
 	pgb := "[" + strings.Repeat(" ", 50) + "]"
 	if p.IfRight {
 		fmt.Printf("%s %s\r", pgb, p.Right)
 	} else {
 		fmt.Printf("%s\r", pgb)
 	}
-	go p.Update()
+	p.wg.Add(1)
+	go p.Update(p.wg)
 }
 
-func (p *ProgressBar) doUpdate() {
-	pgb := "[" + strings.Repeat("=", int(p.Percent/2)) + strings.Repeat(" ", int(50-p.Percent/2)) + "]"
+func (p *ProgressBar) ShowStatic() {
+	if p.IfTitle {
+		fmt.Println(p.Title)
+	}
+	pgb := "[" + strings.Repeat(" ", 50) + "]"
 	if p.IfRight {
 		fmt.Printf("%s %s\r", pgb, p.Right)
 	} else {
@@ -140,7 +144,20 @@ func (p *ProgressBar) doUpdate() {
 	}
 }
 
-func (p *ProgressBar) Update() {
+func (p *ProgressBar) doUpdate() {
+	pgb := "[" + strings.Repeat("=", int(p.Percent/2)) + strings.Repeat(" ", int(50-p.Percent/2)) + "]"
+	lineClear := strings.Repeat(" ", 100)
+	if p.IfRight {
+		fmt.Printf("%s\r", lineClear)
+		fmt.Printf("%s %s\r", pgb, p.Right)
+	} else {
+		fmt.Printf("%s\r", lineClear)
+		fmt.Printf("%s\r", pgb)
+	}
+}
+
+func (p *ProgressBar) Update(wg *sync.WaitGroup) {
+	defer wg.Done()
 	for !p.StopSig {
 		p.doUpdate()
 		time.Sleep(time.Duration(int64(p.UpdateInterval)) * time.Millisecond)
@@ -149,6 +166,8 @@ func (p *ProgressBar) Update() {
 
 func (p *ProgressBar) Stop() {
 	p.StopSig = true
+	p.wg.Wait()
+	fmt.Printf("\n")
 }
 
 func sha1HashFile(filePath string) (string, error) {
@@ -159,16 +178,26 @@ func sha1HashFile(filePath string) (string, error) {
 		return "", rerr
 	}
 	defer file.Close()
+	var hashedSize int
 	info, _ := file.Stat()
 	size := info.Size()
 	blockCount := uint64(math.Ceil(float64(size)) / float64(fileChunk))
 	if blockCount != 0 {
+		pgb := NewProgressBar(pgbUpdateInterval, true, true, "Hashing File: "+info.Name())
+		pgb.Show()
 		for i := uint64(0); i < blockCount; i += 1 {
 			bsz := int(math.Min(float64(fileChunk), float64(size-int64(i*uint64(fileChunk)))))
 			buffer := make([]byte, bsz)
 			file.Read(buffer)
 			io.WriteString(sha1hash, string(buffer))
+			hashedSize += bsz
+			pgb.Percent = uint8(float64(float64(hashedSize)/float64(info.Size())) * 100)
+			pgb.Right = strconv.Itoa(int(pgb.Percent)) + "%"
 		}
+		pgb.Percent = 101
+		pgb.Right = strconv.Itoa(100) + "%"
+		pgb.doUpdate()
+		pgb.Stop()
 	} else {
 		bsz := info.Size()
 		buffer := make([]byte, bsz)
@@ -177,6 +206,23 @@ func sha1HashFile(filePath string) (string, error) {
 	}
 	rets := strings.ToUpper(fmt.Sprintf("%x", sha1hash.Sum(nil)))
 	return rets, nil
+}
+
+func convertSize(sz int64) string {
+	if sz < 1024 {
+		return strconv.FormatInt(sz, 10) + "B"
+	} else if sz < 1024*1024 {
+		sz /= 1024
+		return strconv.FormatInt(sz, 10) + "KB"
+	} else if sz < 1024*1024*1024 {
+		sz /= (1024 * 1024)
+		return strconv.FormatInt(sz, 10) + "MB"
+	} else if sz < 1024*1024*1024*1024 {
+		sz /= (1024 * 1024 * 1024)
+		return strconv.FormatInt(sz, 10) + "GB"
+	} else {
+		return strconv.FormatInt(sz, 10) + "B"
+	}
 }
 
 func fillTo(raw string, tlen int32) string {

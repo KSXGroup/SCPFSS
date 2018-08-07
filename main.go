@@ -2,22 +2,19 @@ package main
 
 import (
 	"SCPFSS"
-	"strconv"
-	"time"
+	//"fmt"
+	//"time"
 )
 
 func main() {
-	/*t := SCPFSS.NewSCPFSS()
-	t.RunConsole()*/
-	t := new(SCPFSS.ProgressBar)
-	t.Title = "Example"
-	t.IfTitle = true
-	t.IfRight = true
+	t := SCPFSS.NewSCPFSS()
+	t.RunConsole()
+	/*t := SCPFSS.NewProgressBar(5, true, true, "Example")
 	t.Show()
-	for i := 1; i <= 100; i += 1 {
-		time.Sleep(time.Millisecond * 200)
+	for i := 1; i <= 101; i += 1 {
+		time.Sleep(100 * time.Millisecond)
 		t.Percent = uint8(i)
-		t.Right = strconv.Itoa(i) + "%"
-		t.Update()
+		//fmt.Print(t.Percent)
 	}
+	t.Stop()*/
 }

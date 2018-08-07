@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,27 +18,28 @@ import (
 )
 
 const (
-	welcomeInfo     string = "Welcome to use Stupid Chord Peer to peer File Sharing System"
-	helpInfo        string = "There is no help info, you are on your own, you can choose to uninstall this stupid software."
-	startShareInfo  string = "share <YourFilePath>"
-	stopShareInfo   string = "stopShare <YourFilePath>"
-	findInfo        string = "find <SCPFSS LINK>"
-	getInfo         string = "sget <SCPFSS LINK>"
-	joinInfo        string = "join <IP:Port>"
-	sgetInfo        string = "sget <SCPFSS LINK>"
-	sgetmInfo       string = "sgetm <Thread Number> <SCPFSS LINK>"
-	linkPrefix      string = "SCPFSP:?h=SHA1:"
-	defaultDhtPort  int32  = 1919
-	defaultFilePort int32  = 2020
-	fileChunk       int32  = 4096
-	linkLen         int32  = 55
-	sha1Len         int32  = 40
-	minFileChunk    int64  = 1024 * 1024
-	TIME_OUT        int64  = 1e9
-	INIT            uint8  = 0
-	GETTING         uint8  = 1
-	FIN             uint8  = 2
-	ERROR           uint8  = 3
+	welcomeInfo       string = "Welcome to use Stupid Chord Peer to peer File Sharing System"
+	helpInfo          string = "There is no help info, you are on your own, you can choose to uninstall this stupid software."
+	startShareInfo    string = "share <YourFilePath>"
+	stopShareInfo     string = "stopShare <YourFilePath>"
+	findInfo          string = "find <SCPFSS LINK>"
+	getInfo           string = "sget <SCPFSS LINK>"
+	joinInfo          string = "join <IP:Port>"
+	sgetInfo          string = "sget <SCPFSS LINK>"
+	sgetmInfo         string = "sgetm <Thread Number> <SCPFSS LINK>"
+	linkPrefix        string = "SCPFSP:?h=SHA1:"
+	defaultDhtPort    int32  = 1919
+	defaultFilePort   int32  = 2020
+	fileChunk         int32  = 4096
+	linkLen           int32  = 55
+	sha1Len           int32  = 40
+	minFileChunk      int64  = 1024 * 1024
+	pgbUpdateInterval uint8  = 1
+	TIME_OUT          int64  = 1e9
+	INIT              uint8  = 0
+	GETTING           uint8  = 1
+	FIN               uint8  = 2
+	ERROR             uint8  = 3
 )
 
 type SCPFSS struct {
@@ -179,6 +181,9 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 	} else {
 		cminChunk = int64(math.Floor(float64(fileInfo.Size)/float64(threadCount) + 0.5))
 	}
+	if threadCount == 0 {
+		threadCount += 1
+	}
 	var getterGroup = make([]*fileGeter, threadCount)
 	var st int64 = 0
 	for i := int32(1); i <= threadCount-1; i += 1 {
@@ -186,15 +191,33 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 		fmt.Printf("task#%d get %d to %d from %s\n", i-1, st, st+cminChunk, slist.list[(i-1)%int32(len(slist.list))])
 		st += cminChunk + 1
 	}
-	if threadCount == 0 {
-		threadCount += 1
-	}
 	getterGroup[threadCount-1] = newFileGetter(slist.list[(threadCount-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, fileInfo.Size-1, threadCount-1)
 	fmt.Printf("task#%d get %d to %d from %s\n", threadCount-1, st, fileInfo.Size-1, slist.list[(threadCount-1)%int32(len(slist.list))])
 	for i := 0; i < int(threadCount); i += 1 {
 		wg.Add(1)
 		go getterGroup[i].startGet(&wg)
 	}
+	pgb := NewProgressBar(50, true, true, "Getting "+fileInfo.Name)
+	last := int64(0)
+	for {
+		cnt := int32(0)
+		tmp := int64(0)
+		for i := 0; i < int(threadCount); i += 1 {
+			if getterGroup[i].status == FIN || getterGroup[i].status == ERROR {
+				cnt += 1
+			}
+			tmp += getterGroup[i].byteRecv
+		}
+		pgb.Percent = uint8(float64(float64(tmp)/float64(fileInfo.Size)) * 100)
+		pgb.Right = strconv.Itoa(int(pgb.Percent)) + "%\t" + convertSize(tmp-last) + "/s"
+		pgb.doUpdate()
+		last = tmp
+		if cnt == threadCount {
+			break
+		}
+		time.Sleep(time.Second * 1)
+	}
+	fmt.Printf("\n")
 	wg.Wait()
 	fileFlag := true
 	fmt.Println("Get finished, merge file together and check")
@@ -205,6 +228,9 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 			os.Remove(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 		}
 	}
+	mpgb := NewProgressBar(10, true, true, "Merge file "+fileInfo.Name)
+	mpgb.Show()
+	total := int64(0)
 	for i := 1; i <= int(threadCount-1); i += 1 {
 		ftmp, ferr := os.Open(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 		if ferr != nil {
@@ -214,6 +240,9 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 		}
 		for {
 			cnt, err := io.CopyN(fileMergedTo, ftmp, int64(BUFFER_LEN*4))
+			total += cnt
+			mpgb.Percent = uint8((float64(float64(total) / float64(fileInfo.Size))) * 100)
+			mpgb.Right = strconv.Itoa(int(mpgb.Percent)) + "%"
 			if cnt < int64(BUFFER_LEN) || err == io.EOF {
 				break
 			}
@@ -221,6 +250,10 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 		ftmp.Close()
 		os.Remove(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 	}
+	mpgb.Percent = uint8(100)
+	mpgb.Right = strconv.Itoa(int(mpgb.Percent)) + "%"
+	mpgb.doUpdate()
+	mpgb.Stop()
 	fileMergedTo.Close()
 	if !fileFlag {
 		for i := 0; i <= int(threadCount-1); i += 1 {
@@ -266,9 +299,24 @@ func (sys *SCPFSS) GetFile(link string, savePath string) error {
 	}
 	remoteAddr := slist.list[0]
 	getter := newFileGetter(remoteAddr, hashid, savePath+fileInfo.Name, startPos, endPos, 0)
-	fmt.Println("Getting file")
+	pgb := NewProgressBar(50, true, true, "Getting "+fileInfo.Name)
+	pgb.ShowStatic()
 	wg.Add(1)
 	go getter.startGet(&wg)
+	for getter.status != GETTING {
+	}
+	lastRecv := int64(0)
+	for getter.status == GETTING {
+		pgb.Percent = uint8(float64(float64(getter.byteRecv)/float64(getter.byteToGet)) * 100)
+		pgb.Right = strconv.Itoa(int(pgb.Percent)) + "% \t" + convertSize((getter.byteRecv - lastRecv)) + "/s"
+		lastRecv = getter.byteRecv
+		pgb.doUpdate()
+		time.Sleep(time.Second * 1)
+	}
+	pgb.Percent = 100
+	pgb.Right = strconv.Itoa(int(pgb.Percent)) + "%"
+	pgb.doUpdate()
+	fmt.Printf("\n")
 	wg.Wait()
 	fmt.Println("Finished")
 	if getter.byteRecv != getter.byteToGet {
@@ -353,7 +401,9 @@ func (sys *SCPFSS) Share(filePath string) (string, error) {
 		return linkPrefix + fileCheckSum, err
 	} else if ret == 1 {
 		fmt.Println("File shared successfully, please note down the link below and share with others:")
+		fmt.Printf("\n")
 		fmt.Println(linkPrefix + fileCheckSum)
+		fmt.Printf("\n")
 		return linkPrefix + fileCheckSum, nil
 	} else {
 		return "", nil
@@ -593,6 +643,11 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		fmt.Println("DHT: " + sys.localDhtAddr)
 		fmt.Println("FileServer: " + sys.localFileServerAddr)
 		fmt.Println("FileRPC: " + sys.localRpcServerAddr)
+		return 1
+	case "clear":
+		cmd := exec.Command("clear")
+		cmd.Stdout = os.Stdout
+		cmd.Run()
 		return 1
 	default:
 		return 0
