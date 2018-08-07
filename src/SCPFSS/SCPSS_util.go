@@ -123,3 +123,10 @@ func sha1HashFile(filePath string) (string, error) {
 	rets := strings.ToUpper(fmt.Sprintf("%x", sha1hash.Sum(nil)))
 	return rets, nil
 }
+
+func fillTo(raw string, tlen int32) string {
+	for len(raw) < int(tlen) {
+		raw += "/"
+	}
+	return raw
+}

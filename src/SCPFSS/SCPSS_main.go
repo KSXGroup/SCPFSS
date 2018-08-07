@@ -5,6 +5,7 @@ import (
 	"chordNode"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/rpc"
 	"os"
@@ -20,12 +21,15 @@ const (
 	startShareInfo  string = "share <YourFilePath>"
 	stopShareInfo   string = "stopShare <YourFilePath>"
 	findInfo        string = "find <SCPFSS LINK>"
+	getInfo         string = "sget <SCPFSS LINK>"
 	joinInfo        string = "join <IP:Port>"
+	sgetInfo        string = "sget <SCPFSS LINK>"
 	linkPrefix      string = "SCPFSP:?h=SHA1:"
 	defaultDhtPort  int32  = 1919
 	defaultFilePort int32  = 2020
 	fileChunk       int32  = 4096
 	linkLen         int32  = 55
+	sha1Len         int32  = 40
 	TIME_OUT        int64  = 1e9
 )
 
@@ -57,6 +61,73 @@ func NewSCPFSS() *SCPFSS {
 
 }
 
+func (sys *SCPFSS) GetFile(link string, savePath string) error {
+	fmt.Println("Start getting files")
+	//var recvCnt int64 = 0
+	var startPos, endPos int64
+	var byteToRecv int64
+	hashid := strings.Replace(link, linkPrefix, "", -1)
+	ok, fileInfo, err := sys.LookUpFile(link)
+	if err != nil || !ok {
+		fmt.Println("Fail to look up fail, please check your link")
+		return errors.New("Fail to look up fail, please check your link")
+	}
+	startPos = 0
+	endPos = fileInfo.Size - 1
+	byteToRecv = endPos - startPos + 1
+	slist, serr := sys.server.getServerList(hashid)
+	if serr != nil {
+		return errors.New("Error when get serverlist")
+	}
+	//TODO USE FIRST SERVER FIRST, THEN IT WILL BECOME MULTI THREAD
+	remoteAddr := slist.list[0]
+	iconn, ierr := net.DialTimeout("tcp", remoteAddr, time.Duration(TIME_OUT))
+	if ierr != nil {
+		fmt.Println("Dial remote node error: " + ierr.Error())
+		if iconn != nil {
+			iconn.Close()
+		}
+		return ierr
+	}
+	newFile, ferr := os.Create(savePath + fileInfo.Name) //do this temporarily
+	if ferr != nil {
+		fmt.Println("Create file fail: " + ferr.Error())
+		return ferr
+	}
+	defer newFile.Close()
+	recvBuffer := make([]byte, int(BUFFER_LEN))
+	iconn.Write([]byte(hashid))
+	_, ioerr := iconn.Read(recvBuffer)
+	if ioerr != nil {
+		fmt.Println("Transfer error, please retry later")
+		iconn.Close()
+		return errors.New("Transfer error, please retry later")
+	}
+	response := strings.Replace(string(recvBuffer), "/", "", -1)
+	fmt.Println("Server Response " + response)
+	fmt.Println(response == "Start")
+	if response != "Start" {
+		fmt.Println("Server give incorrect response, download terminated")
+		ioerr := errors.New("Server give incorrect response, download terminated")
+		iconn.Close()
+		return ioerr
+	}
+	iconn.Write([]byte(fillTo(strconv.FormatInt(startPos, 10), HEADER_LEN)))
+	iconn.Write([]byte(fillTo(strconv.FormatInt(endPos, 10), HEADER_LEN)))
+	fmt.Println("start transfering file")
+	for {
+		if byteToRecv < int64(BUFFER_LEN) {
+			io.CopyN(newFile, iconn, byteToRecv)
+			break
+		}
+		io.CopyN(newFile, iconn, int64(BUFFER_LEN))
+		byteToRecv -= int64(BUFFER_LEN)
+	}
+	iconn.Close()
+	fmt.Println("File transfered successfully")
+	return nil
+}
+
 func (sys *SCPFSS) Quit() {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
 		return
@@ -64,11 +135,8 @@ func (sys *SCPFSS) Quit() {
 		for k, _ := range sys.server.fileShared.filePathToHash {
 			sys.StopShare(k)
 		}
-		//TODO STOP FILE SERVER
-		if sys.server.serverRpcService.rpcListener != nil {
-			sys.server.serverRpcService.rpcListener.Close()
-		}
-		sys.server.dhtNode.Quit()
+		sys.server.stopServer()
+		return
 	}
 }
 
@@ -211,25 +279,26 @@ func (sys *SCPFSS) CreateNetwork() (bool, error) {
 	return true, nil
 }
 
-func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
+func (sys *SCPFSS) LookUpFile(link string) (bool, *SCPFSFileInfo, error) {
 	if sys.server.ifInNetwork == false || sys.server.dhtNode.InRing == false {
 		fmt.Println("Not in the SCPFS Network")
 		err := errors.New("Not in the SCPFS Network")
-		return false, err
+		return false, nil, err
 	}
 	if len(link) != int(linkLen) {
 		fmt.Println("Invalid SCPFS Link")
-		err := errors.New("7Invalid SCPFS Link")
-		return false, err
+		err := errors.New("Invalid SCPFS Link")
+		return false, nil, err
 	}
 	var cl *rpc.Client
-	var ret SCPFSFileInfo
+	var ret *SCPFSFileInfo
 	var arg FileHash
 	var goodFlag bool = false
 	hashid := strings.Replace(link, linkPrefix, "", -1)
+	ret = new(SCPFSFileInfo)
 	sl, err := sys.server.getServerList(hashid)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	fmt.Println("Get avaliable node list:")
 	for _, v := range sl.list {
@@ -240,7 +309,7 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 	if len(sl.list) <= 0 {
 		lerr := errors.New("Invalid server list")
 		fmt.Println("Invalid server list")
-		return false, lerr
+		return false, nil, lerr
 	}
 	arg.FileCheckSum = hashid
 	for _, item := range sl.list {
@@ -260,7 +329,7 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 			fmt.Println(taddr + " Fail")
 		} else {
 			cl = rpc.NewClient(tconn)
-			rpcErr := cl.Call("SCPFSS.LookUpFile", &arg, &ret)
+			rpcErr := cl.Call("SCPFSS.LookUpFile", &arg, ret)
 			cl.Close()
 			if rpcErr == nil {
 				ret.Print()
@@ -271,9 +340,9 @@ func (sys *SCPFSS) LookUpFile(link string) (bool, error) {
 	}
 	if !goodFlag {
 		ferr := errors.New("All nodes are fail, file lost")
-		return false, ferr
+		return false, nil, ferr
 	}
-	return true, nil
+	return true, ret, nil
 }
 
 func (sys *SCPFSS) ListFileShared() {
@@ -342,6 +411,13 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		return 1
 	case "ls":
 		sys.ListFileShared()
+		return 1
+	case "sget":
+		if len(splitedCmd) == 2 {
+			sys.GetFile(splitedCmd[1], "")
+		} else {
+			fmt.Println(sgetInfo)
+		}
 		return 1
 	default:
 		return 0

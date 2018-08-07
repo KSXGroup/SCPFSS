@@ -4,7 +4,10 @@ import (
 	"chordNode"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 	//"fmt"
@@ -14,6 +17,9 @@ import (
 const (
 	MAX_SERVER_LIST_LEN int32 = 10
 	MAX_FILE_TO_SHARE   int32 = 1024
+	HEADER_LEN          int32 = 64
+	SERVER_RESPONSE_LEN int32 = 64
+	BUFFER_LEN          int32 = 1024
 )
 
 type iSCPFSServer struct {
@@ -28,7 +34,9 @@ type iSCPFSServer struct {
 }
 
 type iSCPFSTCPFileServer struct {
-	fileListener *net.Listener
+	fileShared          *fileMapper
+	fileListener        net.Listener
+	localFileServerAddr string
 }
 
 type RpcModule struct {
@@ -54,12 +62,20 @@ func newSCPFSServer(lfsa, lrsa string) *iSCPFSServer {
 	ret := new(iSCPFSServer)
 	ret.fileShared = newFileMapper()
 	ret.serverRpcService = newRpcModule(ret)
+	ret.serverFileService = newSCPFSTCPServer(lfsa, ret.fileShared)
 	ret.severRpc = new(rpc.Server)
 	ret.localFileServerAddr = lfsa
 	ret.localRpcServerAddr = lrsa
 	ret.serverRpcService.rpcListener = nil
 	ret.serverRpcService.server = ret
 	ret.severRpc.RegisterName("SCPFSS", ret.serverRpcService)
+	return ret
+}
+
+func newSCPFSTCPServer(addr string, fmp *fileMapper) *iSCPFSTCPFileServer {
+	ret := new(iSCPFSTCPFileServer)
+	ret.localFileServerAddr = addr
+	ret.fileShared = fmp
 	return ret
 }
 
@@ -90,9 +106,77 @@ func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 	}
 }
 
-func (f *iSCPFSTCPFileServer) serveClient() {}
+func (f *iSCPFSTCPFileServer) serveClient(client net.Conn) {
+	fmt.Println("New client")
+	var startPos, endPos int64
+	bstartpos := make([]byte, int(HEADER_LEN))
+	bendpos := make([]byte, int(HEADER_LEN))
+	bufferHash := make([]byte, int(sha1Len))
+	_, err := client.Read(bufferHash)
+	if err != nil {
+		client.Close()
+		return
+	}
+	hv := string(bufferHash)
+	info, ok := f.fileShared.hashToFileInfo[hv]
+	fileToSent, err := os.Open(info.Path)
+	if err != nil {
+		client.Write([]byte(fillTo("Server File Error", SERVER_RESPONSE_LEN)))
+		client.Close()
+		return
+	}
+	defer fileToSent.Close()
+	if !ok {
+		client.Write([]byte(fillTo("File Not Found", SERVER_RESPONSE_LEN)))
+		client.Close()
+		return
+	}
+	client.Write([]byte(fillTo("Start", SERVER_RESPONSE_LEN)))
+	client.Read(bstartpos)
+	client.Read(bendpos)
+	startPos, _ = strconv.ParseInt(strings.Replace(string(bstartpos), "/", "", -1), 10, 64)
+	endPos, _ = strconv.ParseInt(strings.Replace(string(bendpos), "/", "", -1), 10, 64)
+	byteToSent := endPos - startPos + 1
+	if byteToSent <= 0 {
+		client.Close()
+		return
+	}
+	fileToSent.Seek(startPos, 0)
+	sendBuffer := make([]byte, int(BUFFER_LEN))
+	for {
+		if byteToSent < int64(BUFFER_LEN) {
+			tmpBuffer := make([]byte, byteToSent)
+			fileToSent.Read(tmpBuffer)
+			client.Write(tmpBuffer)
+			break
+		} else {
+			_, err := fileToSent.Read(sendBuffer)
+			if err == io.EOF {
+				break
+			}
+			client.Write(sendBuffer)
+		}
+	}
+	client.Close()
+	return
+}
 
-func (f *iSCPFSTCPFileServer) runFileSever() {}
+func (f *iSCPFSTCPFileServer) runFileSever() {
+	lis, err := net.Listen("tcp", f.localFileServerAddr)
+	if err != nil {
+		fmt.Println("Fail to start file server, please exit and try again later")
+		return
+	}
+	f.fileListener = lis
+	for {
+		conn, err := f.fileListener.Accept()
+		if err != nil {
+			fmt.Println("Listener error, file server stopped" + err.Error())
+			return
+		}
+		go f.serveClient(conn)
+	}
+}
 
 func (s *iSCPFSServer) pingRpcServer(addr string) bool {
 	var arg, ret Greet
@@ -116,8 +200,18 @@ func (s *iSCPFSServer) runServer() error {
 	}
 	s.serverRpcService.rpcListener = lis
 	go s.severRpc.Accept(s.serverRpcService.rpcListener)
-	//TODO RUN FILE SERVER
+	go s.serverFileService.runFileSever()
 	return nil
+}
+
+func (s *iSCPFSServer) stopServer() {
+	if s.serverFileService.fileListener != nil {
+		s.serverFileService.fileListener.Close()
+	}
+	if s.serverRpcService.rpcListener != nil {
+		s.serverRpcService.rpcListener.Close()
+	}
+	s.dhtNode.Quit()
 }
 
 func (h *RpcModule) LookUpFile(arg FileHash, ret *SCPFSFileInfo) (err error) {
