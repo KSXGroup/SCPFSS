@@ -183,54 +183,53 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 	var st int64 = 0
 	for i := int32(1); i <= threadCount-1; i += 1 {
 		getterGroup[i-1] = newFileGetter(slist.list[(i-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, st+cminChunk, i-1)
-		fmt.Printf("task#%d get %d to %d\n", i-1, st, st+cminChunk)
+		fmt.Printf("task#%d get %d to %d from %s\n", i-1, st, st+cminChunk, slist.list[(i-1)%int32(len(slist.list))])
 		st += cminChunk + 1
 	}
 	if threadCount == 0 {
 		threadCount += 1
 	}
 	getterGroup[threadCount-1] = newFileGetter(slist.list[(threadCount-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, fileInfo.Size-1, threadCount-1)
-	fmt.Printf("task#%d get %d to %d\n", threadCount-1, st+1, fileInfo.Size)
+	fmt.Printf("task#%d get %d to %d from %s\n", threadCount-1, st, fileInfo.Size-1, slist.list[(threadCount-1)%int32(len(slist.list))])
 	for i := 0; i < int(threadCount); i += 1 {
 		wg.Add(1)
 		go getterGroup[i].startGet(&wg)
 	}
 	wg.Wait()
-	mergeBuffer := make([]byte, fileChunk)
 	fileFlag := true
 	fmt.Println("Get finished, merge file together and check")
-	fileMergedTo, fmerr := os.OpenFile(savePath+fileInfo.Name+strconv.Itoa(0), os.O_WRONLY|os.O_APPEND, 0666)
+	fileMergedTo, fmerr := os.OpenFile(savePath+fileInfo.Name+".tmp"+strconv.Itoa(0), os.O_WRONLY|os.O_APPEND, 0600)
 	if fmerr != nil {
 		fmt.Println(fmerr.Error())
 		for i := 0; i <= int(threadCount-1); i += 1 {
-			os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+			os.Remove(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 		}
 	}
 	for i := 1; i <= int(threadCount-1); i += 1 {
-		ftmp, ferr := os.Open(savePath + fileInfo.Name + strconv.Itoa(i))
+		ftmp, ferr := os.Open(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 		if ferr != nil {
 			fmt.Println(ferr.Error())
 			fileFlag = false
 			break
 		}
 		for {
-			_, err := ftmp.Read(mergeBuffer)
-			if err == io.EOF {
+			cnt, err := io.CopyN(fileMergedTo, ftmp, int64(BUFFER_LEN*4))
+			if cnt < int64(BUFFER_LEN) || err == io.EOF {
 				break
 			}
-			fileMergedTo.Write(mergeBuffer)
 		}
 		ftmp.Close()
-		os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+		os.Remove(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 	}
 	fileMergedTo.Close()
 	if !fileFlag {
 		for i := 0; i <= int(threadCount-1); i += 1 {
-			os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+			os.Remove(savePath + fileInfo.Name + ".tmp" + strconv.Itoa(i))
 		}
+		fmt.Println("Get error when merge files")
 		return errors.New("Get error when merge files")
 	} else {
-		os.Rename(savePath+fileInfo.Name+strconv.Itoa(0), savePath+fileInfo.Name)
+		os.Rename(savePath+fileInfo.Name+".tmp"+strconv.Itoa(0), savePath+fileInfo.Name)
 		fmt.Println("Start check file")
 		v, herr := sha1HashFile(savePath + fileInfo.Name)
 		if herr != nil {
@@ -241,6 +240,7 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 			fmt.Println("Success")
 			return nil
 		} else {
+			fmt.Printf("my:%s remote:%s\n", v, hashid)
 			fmt.Println("Check fail, please retry")
 			return errors.New("Check fail, please retry")
 		}

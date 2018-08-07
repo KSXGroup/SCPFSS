@@ -39,6 +39,14 @@ type serverList struct {
 	length int32
 }
 
+type ProgressBar struct {
+	Percent uint8
+	Title   string
+	Right   string
+	ifTitle bool
+	ifRight bool
+}
+
 const (
 	LOG_INFO  uint8 = 1
 	LOG_ERROR uint8 = 2
@@ -95,6 +103,10 @@ func findFreePort(startPort int32) int32 {
 	}
 	return st
 }
+
+func (p *ProgressBar) show() {}
+
+func (p *ProgressBar) update() {}
 
 func sha1HashFile(filePath string) (string, error) {
 	file, err := os.Open(filePath)
