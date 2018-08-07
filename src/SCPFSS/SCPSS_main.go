@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/rpc"
 	"os"
@@ -160,20 +161,39 @@ func (g *fileGeter) startGet(wg *sync.WaitGroup) error {
 func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount int32) error {
 	fmt.Println("Start getting files")
 	//var recvCnt int64 = 0
-	var startPos, endPos int64
 	var wg sync.WaitGroup
+	var cminChunk int64 = 0
 	hashid := strings.Replace(link, linkPrefix, "", -1)
 	ok, fileInfo, err := sys.LookUpFile(link)
 	if err != nil || !ok {
 		fmt.Println("Fail to look up, please check your link")
 		return errors.New("Fail to look up fail, please check your link")
 	}
-	startPos = 0
-	endPos = fileInfo.Size - 1
 	slist, serr := sys.server.getServerList(hashid)
 	if serr != nil {
 		return errors.New("Error when get serverlist")
 	}
+	if float64(fileInfo.Size/int64(threadCount)) < float64(minFileChunk) {
+		threadCount = int32(math.Floor(float64(fileInfo.Size)/float64(minFileChunk) + 0.5))
+		cminChunk = int64(minFileChunk)
+	} else {
+		cminChunk = int64(math.Floor(float64(fileInfo.Size)/float64(threadCount) + 0.5))
+	}
+	var getterGroup = make([]*fileGeter, threadCount)
+	var st int64 = 0
+	for i := int32(1); i <= threadCount-1; i += 1 {
+		getterGroup[i-1] = newFileGetter(slist.list[(i-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, st+cminChunk, i-1)
+		//fmt.Printf("task#%d get %d to %d\n", i-1, st, st+cminChunk)
+		st += cminChunk + 1
+	}
+	getterGroup[threadCount-1] = newFileGetter(slist.list[(threadCount-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, fileInfo.Size-1, threadCount-1)
+	//fmt.Printf("task#%d get %d to %d\n", threadCount-1, st+1, fileInfo.Size)
+	for i := 0; i < int(threadCount); i += 1 {
+		wg.Add(1)
+		go etterGroup[i].startGet(&wg)
+	}
+	wg.Wait()
+	return nil
 }
 
 func (sys *SCPFSS) GetFile(link string, savePath string) error {
@@ -471,28 +491,28 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		if len(splitedCmd) == 2 {
 			sys.Share(splitedCmd[1])
 		} else {
-			PrintLog(startShareInfo, INFO)
+			fmt.Println(startShareInfo)
 		}
 		return 1
 	case "stopshare":
 		if len(splitedCmd) == 2 {
 			sys.StopShare(splitedCmd[1])
 		} else {
-			PrintLog(stopShareInfo, INFO)
+			fmt.Println(stopShareInfo)
 		}
 		return 1
 	case "join":
 		if len(splitedCmd) == 2 {
 			sys.JoinNetwork(splitedCmd[1])
 		} else {
-			PrintLog(joinInfo, INFO)
+			fmt.Println(joinInfo)
 		}
 		return 1
 	case "find":
 		if len(splitedCmd) == 2 {
 			sys.LookUpFile(splitedCmd[1])
 		} else {
-			PrintLog(findInfo, INFO)
+			fmt.Println(findInfo)
 		}
 		return 1
 	case "create":
@@ -510,7 +530,7 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		return 1
 	case "sgetm":
 		cnt, err = strconv.Atoi(splitedCmd[1])
-		if len(splitedCmd) == 2 && err == nil {
+		if len(splitedCmd) == 3 && err == nil {
 			sys.GetFileMultiThread(splitedCmd[2], "", int32(cnt))
 			return 1
 		} else {
@@ -519,8 +539,9 @@ func (sys *SCPFSS) handleCmd(cmd string) int {
 		}
 	case "info":
 		fmt.Println("DHT: " + sys.localDhtAddr)
-		fmt.Println("FileRPC: " + sys.localRpcServerAddr)
 		fmt.Println("FileServer: " + sys.localFileServerAddr)
+		fmt.Println("FileRPC: " + sys.localRpcServerAddr)
+		return 1
 	default:
 		return 0
 	}

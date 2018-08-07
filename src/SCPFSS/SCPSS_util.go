@@ -40,8 +40,8 @@ type serverList struct {
 }
 
 const (
-	INFO  uint8 = 1
-	ERROR uint8 = 2
+	LOG_INFO  uint8 = 1
+	LOG_ERROR uint8 = 2
 )
 
 func (info *SCPFSFileInfo) Print() {
@@ -50,9 +50,9 @@ func (info *SCPFSFileInfo) Print() {
 
 func PrintLog(log string, logType uint8) {
 	s := "[" + time.Unix(time.Now().Unix(), 0).Format("2006/01/02 15:04:05") + "]" + log + "\n"
-	if logType == INFO {
+	if logType == LOG_INFO {
 		s = "[INFO]" + s
-	} else if logType == ERROR {
+	} else if logType == LOG_ERROR {
 		s = "[ERROR]" + s
 	}
 	fmt.Print(s)
