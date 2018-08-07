@@ -183,17 +183,56 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 	var st int64 = 0
 	for i := int32(1); i <= threadCount-1; i += 1 {
 		getterGroup[i-1] = newFileGetter(slist.list[(i-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, st+cminChunk, i-1)
-		//fmt.Printf("task#%d get %d to %d\n", i-1, st, st+cminChunk)
+		fmt.Printf("task#%d get %d to %d\n", i-1, st, st+cminChunk)
 		st += cminChunk + 1
 	}
+	if threadCount == 0 {
+		threadCount += 1
+	}
 	getterGroup[threadCount-1] = newFileGetter(slist.list[(threadCount-1)%int32(len(slist.list))], hashid, savePath+fileInfo.Name, st, fileInfo.Size-1, threadCount-1)
-	//fmt.Printf("task#%d get %d to %d\n", threadCount-1, st+1, fileInfo.Size)
+	fmt.Printf("task#%d get %d to %d\n", threadCount-1, st+1, fileInfo.Size)
 	for i := 0; i < int(threadCount); i += 1 {
 		wg.Add(1)
-		go etterGroup[i].startGet(&wg)
+		go getterGroup[i].startGet(&wg)
 	}
 	wg.Wait()
-	return nil
+	mergeBuffer := make([]byte, fileChunk)
+	fileFlag := true
+	fmt.Println("Get finished, merge file together and check")
+	fileMergedTo, fmerr := os.OpenFile(savePath+fileInfo.Name+strconv.Itoa(0), os.O_WRONLY|os.O_APPEND, 0666)
+	if fmerr != nil {
+		fmt.Println(fmerr.Error())
+		for i := 0; i <= int(threadCount-1); i += 1 {
+			os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+		}
+	}
+	for i := 1; i <= int(threadCount-1); i += 1 {
+		ftmp, ferr := os.Open(savePath + fileInfo.Name + strconv.Itoa(i))
+		if ferr != nil {
+			fmt.Println(ferr.Error())
+			fileFlag = false
+			break
+		}
+		for {
+			_, err := ftmp.Read(mergeBuffer)
+			if err == io.EOF {
+				break
+			}
+			fileMergedTo.Write(mergeBuffer)
+		}
+		ftmp.Close()
+		os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+	}
+	fileMergedTo.Close()
+	if !fileFlag {
+		for i := 0; i <= int(threadCount-1); i += 1 {
+			os.Remove(savePath + fileInfo.Name + strconv.Itoa(i))
+		}
+		return errors.New("Get error when merge files")
+	} else {
+		os.Rename(savePath+fileInfo.Name+strconv.Itoa(0), savePath+fileInfo.Name)
+		return nil
+	}
 }
 
 func (sys *SCPFSS) GetFile(link string, savePath string) error {
