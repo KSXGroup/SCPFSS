@@ -231,7 +231,19 @@ func (sys *SCPFSS) GetFileMultiThread(link string, savePath string, threadCount 
 		return errors.New("Get error when merge files")
 	} else {
 		os.Rename(savePath+fileInfo.Name+strconv.Itoa(0), savePath+fileInfo.Name)
-		return nil
+		fmt.Println("Start check file")
+		v, herr := sha1HashFile(savePath + fileInfo.Name)
+		if herr != nil {
+			fmt.Println("Hash error: " + herr.Error())
+			return herr
+		}
+		if v == hashid {
+			fmt.Println("Success")
+			return nil
+		} else {
+			fmt.Println("Check fail, please retry")
+			return errors.New("Check fail, please retry")
+		}
 	}
 }
 
@@ -268,10 +280,11 @@ func (sys *SCPFSS) GetFile(link string, savePath string) error {
 	hashOfNewFile, err := sha1HashFile(savePath + fileInfo.Name)
 	if hashOfNewFile == hashid {
 		fmt.Println("Success")
+		return nil
 	} else {
 		fmt.Println("Check fail, please retry")
+		return errors.New("Check fail, please retry")
 	}
-	return nil
 }
 
 func (sys *SCPFSS) Quit() {
