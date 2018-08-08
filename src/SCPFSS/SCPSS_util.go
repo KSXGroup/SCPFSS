@@ -217,11 +217,11 @@ func convertSize(sz int64) string {
 		sz /= 1024
 		return strconv.FormatInt(sz, 10) + "KB"
 	} else if sz < 1024*1024*1024 {
-		sz /= (1024 * 1024)
-		return strconv.FormatInt(sz, 10) + "MB"
+		res := float64(sz) / float64(1024*1024)
+		return strconv.FormatFloat(res, 'f', 2, 64) + "MB"
 	} else if sz < 1024*1024*1024*1024 {
-		sz /= (1024 * 1024 * 1024)
-		return strconv.FormatInt(sz, 10) + "GB"
+		res := float64(sz) / float64(1024*1024*1024)
+		return strconv.FormatFloat(res, 'f', 2, 64) + "GB"
 	} else {
 		return strconv.FormatInt(sz, 10) + "B"
 	}
