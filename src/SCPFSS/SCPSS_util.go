@@ -137,7 +137,9 @@ func (p *ProgressBar) ShowStatic() {
 		fmt.Println(p.Title)
 	}
 	pgb := "[" + strings.Repeat(" ", 50) + "]"
+	lineClear := strings.Repeat(" ", 60)
 	if p.IfRight {
+		fmt.Printf("%s\r", lineClear)
 		fmt.Printf("%s %s\r", pgb, p.Right)
 	} else {
 		fmt.Printf("%s\r", pgb)
@@ -146,7 +148,7 @@ func (p *ProgressBar) ShowStatic() {
 
 func (p *ProgressBar) doUpdate() {
 	pgb := "[" + strings.Repeat("=", int(p.Percent/2)) + strings.Repeat(" ", int(50-p.Percent/2)) + "]"
-	lineClear := strings.Repeat(" ", 100)
+	lineClear := strings.Repeat(" ", 60)
 	if p.IfRight {
 		fmt.Printf("%s\r", lineClear)
 		fmt.Printf("%s %s\r", pgb, p.Right)
