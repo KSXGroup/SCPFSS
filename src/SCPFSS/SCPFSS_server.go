@@ -94,6 +94,7 @@ func (s *iSCPFSServer) getServerList(hashedValue string) (*serverList, error) {
 	} else {
 		tmp := s.deCodeServerList(rawString)
 		if len(rawString) <= 8 || len(tmp) == 0 {
+			fmt.Println("rawData:" + rawString)
 			fmt.Println("Get invalid server list")
 			err := errors.New("Get invalid server list")
 			return nil, err

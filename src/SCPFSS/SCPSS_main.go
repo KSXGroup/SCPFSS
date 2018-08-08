@@ -35,7 +35,7 @@ const (
 	sha1Len           int32  = 40
 	minFileChunk      int64  = 1024 * 1024
 	pgbUpdateInterval uint8  = 1
-	TIME_OUT          int64  = 1e9
+	TIME_OUT          int64  = 5e9
 	INIT              uint8  = 0
 	GETTING           uint8  = 1
 	FIN               uint8  = 2
